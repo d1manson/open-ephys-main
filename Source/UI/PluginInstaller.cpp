@@ -166,7 +166,7 @@ void PluginInstaller::installPluginAndDependency (const String& plugin, String v
     String response = URL (baseUrl).readEntireTextStream();
 
     if (response.isEmpty())
-        LOGD ("Unable to fetch plugins! Please check your internet connection and try again.")
+        LOGE ("Unable to fetch plugins! Please check your internet connection and try again.")
 
     var gatewayData;
     Result result = JSON::parse (response, gatewayData);
@@ -191,7 +191,7 @@ void PluginInstaller::installPluginAndDependency (const String& plugin, String v
 
     if (! pluginFound)
     {
-        LOGC ("Automated Plugin Installation Failed! Plugin not found!")
+        LOGE ("Automated Plugin Installation Failed! Plugin not found!")
         return;
     }
 
@@ -210,7 +210,6 @@ void PluginInstaller::installPluginAndDependency (const String& plugin, String v
     requiredPluginInfo.pluginName = pluginData[pIndex].getProperty ("name", "NULL").toString();
     requiredPluginInfo.displayName = plugin;
     requiredPluginInfo.type = pluginData[pIndex].getProperty ("type", "NULL").toString();
-    requiredPluginInfo.latestVersion = pluginData[pIndex].getProperty ("latest_version", "NULL");
 
     auto allVersions = pluginData[pIndex].getProperty ("versions", "NULL").getArray();
 
@@ -235,7 +234,28 @@ void PluginInstaller::installPluginAndDependency (const String& plugin, String v
             {
                 if (pluginData[i].getProperty ("name", "NULL").toString().equalsIgnoreCase (dependency))
                 {
-                    requiredPluginInfo.dependencyVersions.add (pluginData[i].getProperty ("latest_version", "NULL").toString());
+                    // Get the latest compatible version of the dependency
+                    auto allDepVersions = pluginData[i].getProperty ("versions", "NULL").getArray();
+                    StringArray compatibleVersions;
+                    for (String depVersion : *allDepVersions)
+                    {
+                        String apiVer = depVersion.substring (depVersion.indexOf ("I") + 1);
+
+                        if (apiVer.equalsIgnoreCase (String (PLUGIN_API_VER)))
+                            compatibleVersions.add (depVersion);
+                    }
+
+                    if (! compatibleVersions.isEmpty())
+                    {
+                        compatibleVersions.sort (false);
+                        requiredPluginInfo.dependencyVersions.add (compatibleVersions[compatibleVersions.size() - 1]);
+                    }
+                    else
+                    {
+                        LOGE ("Automated Plugin Installation Failed! Compatible plugin version not found!")
+                        return;
+                    }
+
                     break;
                 }
             }
@@ -262,7 +282,7 @@ void PluginInstaller::installPluginAndDependency (const String& plugin, String v
         }
         else
         {
-            LOGC ("Automated Plugin Installation Failed! Compatible plugin version not found!")
+            LOGE ("Automated Plugin Installation Failed! Compatible plugin version not found!")
             return;
         }
     }
@@ -444,7 +464,27 @@ void PluginInstallerComponent::run()
                 {
                     if (gatewayData[i].getProperty ("name", "NULL").toString().equalsIgnoreCase (pName))
                     {
-                        latestVer = gatewayData[i].getProperty ("latest_version", "NULL");
+                        // Get the latest compatible version
+                        auto allVersions = gatewayData[i].getProperty ("versions", "NULL").getArray();
+                        StringArray compatibleVersions;
+                        for (String depVersion : *allVersions)
+                        {
+                            String apiVer = depVersion.substring (depVersion.indexOf ("I") + 1);
+
+                            if (apiVer.equalsIgnoreCase (String (PLUGIN_API_VER)))
+                                compatibleVersions.add (depVersion);
+                        }
+
+                        if (! compatibleVersions.isEmpty())
+                        {
+                            compatibleVersions.sort (false);
+                            latestVer = compatibleVersions[compatibleVersions.size() - 1];
+                        }
+                        else
+                        {
+                            latestVer = "0.0.0-API" + String (PLUGIN_API_VER);
+                        }
+
                         break;
                     }
                 }
@@ -670,7 +710,7 @@ void PluginListBoxComponent::run()
             pluginName = pluginData[i].getProperty ("name", var()).toString();
             label = pluginData[i].getProperty ("type", "NULL").toString();
             dispName = pluginData[i].getProperty ("display_name", "NULL").toString();
-            
+
             pluginTextWidth = GlyphArrangement::getStringWidthInt (Font (listFont), dispName);
             if (pluginTextWidth > maxTextWidth)
                 maxTextWidth = pluginTextWidth;
@@ -683,16 +723,16 @@ void PluginListBoxComponent::run()
             }
             else
             {
-                String ver = pluginData[i].getProperty ("latest_version", "NULL").toString();
-                dependencyVersion.set (pluginName, ver);
+                compatibleVersions.sort (false);
+                dependencyVersion.set (pluginName, compatibleVersions[compatibleVersions.size() - 1]);
             }
         }
 
         //setProgress ((i + 1) / (double) numRows);
     }
 
-    const MessageManagerLock mmLock;
-    setNumRows (pluginArray.size());
+    MessageManager::callAsync ([this]
+                               { setNumRows (pluginArray.size()); });
 }
 
 bool PluginListBoxComponent::loadPluginInfo (const String& pluginName)
@@ -720,7 +760,6 @@ bool PluginListBoxComponent::loadPluginInfo (const String& pluginName)
     selectedPluginInfo.displayName = displayNames[pluginName];
     selectedPluginInfo.type = pluginLabels[pluginName];
     selectedPluginInfo.developers = pluginData[pIndex].getProperty ("developers", "NULL");
-    selectedPluginInfo.latestVersion = pluginData[pIndex].getProperty ("latest_version", "NULL");
     String updated = pluginData[pIndex].getProperty ("updated", "NULL");
     selectedPluginInfo.lastUpdated = updated.substring (0, updated.indexOf ("T"));
     selectedPluginInfo.description = pluginData[pIndex].getProperty ("desc", "NULL");
@@ -738,6 +777,11 @@ bool PluginListBoxComponent::loadPluginInfo (const String& pluginName)
         if (apiVer.equalsIgnoreCase (String (PLUGIN_API_VER)))
             selectedPluginInfo.versions.add (version);
     }
+
+    // Set the latest version from the list of compatible versions
+    auto sortedVersions = selectedPluginInfo.versions;
+    sortedVersions.sort (false);
+    selectedPluginInfo.latestVersion = sortedVersions[sortedVersions.size() - 1];
 
     selectedPluginInfo.dependencies.clear();
     auto dependencies = pluginData[pIndex].getProperty ("dependencies", "NULL").getArray();
@@ -977,8 +1021,26 @@ void PluginInfoComponent::setDownloadURL (const String& url)
 
 void PluginInfoComponent::showAlertOnMessageThread (MessageBoxIconType iconType, const String& title, const String& message)
 {
-    MessageManager::callAsync ([iconType, title, message]()
+    MessageManager::callAsync ([=]()
                                { AlertWindow::showMessageBoxAsync (iconType, title, message); });
+}
+
+void PluginInfoComponent::updateUIOnMessageThread()
+{
+    MessageManager::callAsync ([this]()
+    {
+        pInfo.installedVersion = pInfo.selectedVersion;
+        installedVerText.setText (pInfo.installedVersion, dontSendNotification);
+        downloadButton.setEnabled (false);
+        downloadButton.setButtonText ("Installed");
+        uninstallButton.setVisible (true);
+
+        if (pInfo.installedVersion.equalsIgnoreCase (pInfo.latestVersion))
+        {
+            updatablePlugins.removeString (pInfo.pluginName);
+            this->getParentComponent()->resized();
+        } 
+    });
 }
 
 void PluginInfoComponent::run()
@@ -1095,17 +1157,7 @@ void PluginInfoComponent::run()
 
         LOGC ("Download Successful!!");
 
-        pInfo.installedVersion = pInfo.selectedVersion;
-        installedVerText.setText (pInfo.installedVersion, dontSendNotification);
-        downloadButton.setEnabled (false);
-        downloadButton.setButtonText ("Installed");
-        uninstallButton.setVisible (true);
-
-        if (pInfo.latestVersion.equalsIgnoreCase (pInfo.latestVersion))
-        {
-            updatablePlugins.removeString (pInfo.pluginName);
-            this->getParentComponent()->resized();
-        }
+        updateUIOnMessageThread();
     }
     else if (dlReturnCode == ZIP_NOTFOUND)
     {
@@ -1158,17 +1210,7 @@ void PluginInfoComponent::run()
 
         LOGE ("Loading Plugin Failed!!");
 
-        pInfo.installedVersion = pInfo.selectedVersion;
-
-        const MessageManagerLock mmLock;
-        downloadButton.setEnabled (false);
-        downloadButton.setButtonText ("Installed");
-
-        if (pInfo.latestVersion.equalsIgnoreCase (pInfo.latestVersion))
-        {
-            updatablePlugins.removeString (pInfo.pluginName);
-            this->getParentComponent()->repaint();
-        }
+        updateUIOnMessageThread();
     }
     else if (dlReturnCode == HTTP_ERR)
     {

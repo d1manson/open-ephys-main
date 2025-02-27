@@ -654,7 +654,10 @@ void GenericEditor::update (bool isEnabled_)
         if (numChannels == 0)
         {
             if (drawerButton != nullptr)
+            {
+                drawerButton->setToggleState (false, sendNotification);
                 drawerButton->setVisible (false);
+            }
         }
         else
         {
@@ -1194,15 +1197,6 @@ void GenericEditor::streamEnabledStateChanged (uint16 streamId, bool isEnabled, 
 {
     if (streamSelector != nullptr)
         streamSelector->setStreamEnabledState (streamId, isEnabled);
-
-    getProcessor()->setStreamEnabled (streamId, isEnabled);
-
-    if (! isLoading)
-        CoreServices::updateSignalChain (this);
-    else
-    {
-        // streamSelector->getStreamInfoView(getProcessor()->getDataStream(streamId))->setEnabled(isEnabled);
-    }
 }
 
 /***************************/

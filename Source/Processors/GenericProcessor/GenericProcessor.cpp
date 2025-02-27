@@ -545,12 +545,18 @@ void GenericProcessor::parameterChangeRequest (Parameter* param)
     setParameter (-1, 0.0f);
 
     if (! headlessMode
-        && dataStreams.size() > 0
-        && param->getType() == Parameter::ParameterType::SELECTED_STREAM_PARAM
-        && ((SelectedStreamParameter*) param)->shouldSyncWithStreamSelector())
+        && dataStreams.size() > 0)
     {
-        uint16 streamId = dataStreams[param->getValue()]->getStreamId();
-        getEditor()->updateSelectedStream (streamId);
+        if (param->getType() == Parameter::ParameterType::SELECTED_STREAM_PARAM
+            && ((SelectedStreamParameter*) param)->shouldSyncWithStreamSelector())
+        {
+            uint16 streamId = dataStreams[param->getValue()]->getStreamId();
+            getEditor()->updateSelectedStream (streamId);
+        }
+        else if (param->getName() == "enable_stream" && param->getStreamId() > 0)
+        {
+            getEditor()->streamEnabledStateChanged (param->getStreamId(), (bool) param->getValue());
+        }
     }
 }
 
@@ -612,18 +618,8 @@ void GenericProcessor::clearSettings()
 {
     LOGDD ("Clearing settings for ", getName());
 
-    Array<ContinuousChannel*> continuousChannelsToKeep;
-
-    for (auto obj : continuousChannels)
-    {
-        if (! obj->isLocal())
-            delete obj;
-        else
-            continuousChannelsToKeep.add (obj);
-    }
-
-    continuousChannels.clearQuick (false);
-    continuousChannels.addArray (continuousChannelsToKeep);
+    // Clear all continuous channels. No need to keep local channels around.
+    continuousChannels.clear();
 
     // Clear all event channels. No need to keep local channels around.
     eventChannels.clear();
@@ -1797,9 +1793,16 @@ void GenericProcessor::loadFromXml()
             {
                 for (int i = 0; i < xmlNode->getNumAttributes(); i++)
                 {
-                    auto param = getParameter (xmlNode->getAttributeName (i));
-                    param->fromXml (xmlNode);
-                    parameterValueChanged (param);
+                    if (auto* param = getParameter (xmlNode->getAttributeName (i)))
+                    {
+                        param->fromXml (xmlNode);
+                        parameterValueChanged (param);
+                    }
+                    else
+                    {
+                        jassertfalse;
+                        LOGD ("Processor parameter not found: ", xmlNode->getAttributeName (i), ". Skipping...");
+                    }
                 }
             }
 
@@ -1916,6 +1919,8 @@ void GenericProcessor::loadFromXml()
                             }
                             else
                             {
+                                jassertfalse;
+                                LOGD ("Stream parameter not found: ", name, ". Skipping...");
                                 continue;
                             }
                         }
